@@ -1,6 +1,7 @@
 buildscript {
   repositories {
     jcenter()
+    mavenCentral()
   }
 
   dependencies {
@@ -28,5 +29,4 @@ repositories {
 
 dependencies {
   compile 'com.facebook.react:react-native:0.15.+'
-  compile 'com.anjlab.android.iab.v3:library:1.0.23'
 }
