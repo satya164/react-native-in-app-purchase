@@ -17,16 +17,14 @@ public class InAppPurchasePackage implements ReactPackage {
 
     private InAppPurchaseModule mModuleInstance;
     private final Context mActivityContext;
-    private final String mLicenseKey;
 
-    public InAppPurchasePackage(Context activityContext, String licenseKey) {
+    public InAppPurchasePackage(Context activityContext) {
         mActivityContext = activityContext;
-        mLicenseKey = licenseKey;
     }
 
     @Override
     public List<NativeModule> createNativeModules(ReactApplicationContext reactContext) {
-        mModuleInstance = new InAppPurchaseModule(reactContext, mActivityContext, mLicenseKey);
+        mModuleInstance = new InAppPurchaseModule(reactContext, mActivityContext);
 
         return Arrays.<NativeModule>asList(mModuleInstance);
     }
@@ -45,9 +43,9 @@ public class InAppPurchasePackage implements ReactPackage {
         return mModuleInstance != null && mModuleInstance.handleActivityResult(requestCode, resultCode, data);
     }
 
-    public void release() {
+    public void onDestroy() {
         if (mModuleInstance != null) {
-            mModuleInstance.release();
+            mModuleInstance.unBindService();
         }
     }
 }

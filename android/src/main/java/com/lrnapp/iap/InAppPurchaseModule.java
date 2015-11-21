@@ -10,7 +10,6 @@ import android.os.AsyncTask;
 import android.os.Bundle;
 import android.os.IBinder;
 import android.os.RemoteException;
-import android.util.Log;
 
 import com.android.vending.billing.IInAppBillingService;
 import com.facebook.react.bridge.Arguments;
@@ -25,46 +24,68 @@ import org.json.JSONException;
 import org.json.JSONObject;
 
 import java.util.ArrayList;
-import java.util.HashMap;
-import java.util.Map;
+import java.util.List;
 import java.util.UUID;
 
 
 public class InAppPurchaseModule extends ReactContextBaseJavaModule {
 
-    private final static String TAG = "IN_APP_PURCHASE";
+    private static final int REQUEST_CODE_PURCHASE = 149455;
 
-    private final static int REQUEST_CODE_PURCHASE = 149455;
+    private static final String ITEM_ID_LIST = "ITEM_ID_LIST";
+    private static final String INAPP = "inapp";
+    private static final String RESPONSE_CODE = "RESPONSE_CODE";
+    private static final String DETAILS_LIST = "DETAILS_LIST";
+    private static final String BUY_INTENT = "BUY_INTENT";
+    private static final String INAPP_PURCHASE_DATA = "INAPP_PURCHASE_DATA";
 
-    private final static String ITEM_ID_LIST = "ITEM_ID_LIST";
-    private final static String INAPP = "inapp";
-    private final static String RESPONSE_CODE = "RESPONSE_CODE";
-    private final static String DETAILS_LIST = "DETAILS_LIST";
-    private final static String BUY_INTENT = "BUY_INTENT";
-    private final static String INAPP_PURCHASE_DATA = "INAPP_PURCHASE_DATA";
-    private final static String INAPP_DATA_SIGNTAURE = "INAPP_DATA_SIGNTAURE";
+    private static final int BILLING_API_VERSION = 3;
+    private static final int BILLING_RESPONSE_RESULT_OK = 0;
 
-    private final static int BILLING_RESPONSE_RESULT_OK = 0;
+    private static final String PROP_AUTO_RENEWING = "autoRenewing";
+    private static final String PROP_ORDER_ID = "orderId";
+    private static final String PROP_PACKAGE_NAME = "packageName";
+    private static final String PROP_PRODUCT_ID = "productId";
+    private static final String PROP_PURCHASE_TIME = "purchaseTime";
+    private static final String PROP_PURCHASE_STATE = "purchaseState";
+    private static final String PROP_PURCHASE_TOKEN = "purchaseToken";
+    private static final String PROP_DEVELOPER_PAYLOAD = "developerPayload";
 
-    private final static String PROP_AUTO_RENEWING = "autoRenewing";
-    private final static String PROP_ORDER_ID = "orderId";
-    private final static String PROP_PACKAGE_NAME = "packageName";
-    private final static String PROP_PRODUCT_ID = "productId";
-    private final static String PROP_PURCHASE_TIME = "purchaseTime";
-    private final static String PROP_PURCHASE_STATE = "purchaseState";
-    private final static String PROP_PURCHASE_TOKEN = "purchaseToken";
-    private final static String PROP_DEVELOPER_PAYLOAD = "developerPayload";
+    private static final String ERROR_PRODUCTS_LOAD_FAILED = "Failed to load products";
+    private static final String ERROR_PURCHASE_CANCELLED = "Purchase was cancelled";
+    private static final String ERROR_PURCHASE_UNKNOWN = "An error occurred while purchase";
 
-    private final static String ERROR_UNAVAILABLE = "In app purchases are not available on this device";
-    private final static String ERROR_IN_PROGRESS = "An operation is already in progress";
-    private final static String ERROR_PRODUCTS_LOAD_FAILED = "Failed to load products";
+    private static final class Purchase {
+        private String mProductId;
+        private String mToken;
+        private Promise mPromise;
 
-    private Map<String, Promise> pendingPurchases = new HashMap<>();
+        Purchase(final String productId, final String token, final Promise promise) {
+            mProductId = productId;
+            mToken = token;
+            mPromise = promise;
+        }
 
-    private String mLicenseKey;
+        public String getProductId() {
+            return mProductId;
+        }
+
+        public String getToken() {
+            return mToken;
+        }
+
+        public Promise getPromise() {
+            return mPromise;
+        }
+    }
+
+    private List<Purchase> queuedPurchases = new ArrayList<>();
+
+    private Purchase pendingPurchase;
     private Context mActivityContext;
     private IInAppBillingService mService;
 
+    // Establish a connection with Billing Service on Google Play
     private ServiceConnection mServiceConn = new ServiceConnection() {
         @Override
         public void onServiceDisconnected(ComponentName name) {
@@ -77,14 +98,14 @@ public class InAppPurchaseModule extends ReactContextBaseJavaModule {
         }
     };
 
-    public InAppPurchaseModule(ReactApplicationContext reactContext, Context activityContext, String licenseKey) {
+    public InAppPurchaseModule(ReactApplicationContext reactContext, Context activityContext) {
         super(reactContext);
 
         mActivityContext = activityContext;
-        mLicenseKey = licenseKey;
 
         Intent serviceIntent = new Intent("com.android.vending.billing.InAppBillingService.BIND");
 
+        // Explicitly set the intent's target package name to protect the security of billing transactions
         serviceIntent.setPackage("com.android.vending");
         activityContext.bindService(serviceIntent, mServiceConn, Context.BIND_AUTO_CREATE);
     }
@@ -111,23 +132,37 @@ public class InAppPurchaseModule extends ReactContextBaseJavaModule {
         return map;
     }
 
-    private void onPurchaseSuccess(final String data) {
-        try {
-            WritableMap map = convertDataToMap(data);
-            String purchaseToken = map.getString(PROP_PRODUCT_ID);
+    private void onPurchaseHandled() {
+        pendingPurchase = null;
 
-            if (pendingPurchases.containsKey(purchaseToken)) {
-                pendingPurchases.get(purchaseToken).resolve(map);
-                pendingPurchases.remove(purchaseToken);
+        // Handle queued purchases if there are any
+        if (!queuedPurchases.isEmpty()) {
+            handlePendingPurchase(queuedPurchases.remove(queuedPurchases.size() - 1));
+        }
+    }
+
+    private void onPurchaseError(final String reason) {
+        if (pendingPurchase != null) {
+            pendingPurchase.getPromise().reject(reason);
+            onPurchaseHandled();
+        }
+    }
+
+    private void onPurchaseSuccess(final String data) {
+        if (pendingPurchase != null) {
+            try {
+                pendingPurchase.getPromise().resolve(convertDataToMap(data));
+                onPurchaseHandled();
+            } catch (JSONException e) {
+                onPurchaseError(e.getMessage());
             }
-        } catch (JSONException e) {
-            Log.e(TAG, e.getMessage(), e);
         }
     }
 
     @ReactMethod
     public void loadProducts(final ReadableArray products, final Promise promise) {
-        AsyncTask.execute(new Runnable() {
+        // Use a separate thread for the request as it does a network request
+        new Thread(new Runnable() {
             @Override
             public void run() {
                 ArrayList<String> skuList = new ArrayList<>();
@@ -141,7 +176,7 @@ public class InAppPurchaseModule extends ReactContextBaseJavaModule {
                 querySkus.putStringArrayList(ITEM_ID_LIST, skuList);
 
                 try {
-                    Bundle skuDetails = mService.getSkuDetails(3, mActivityContext.getPackageName(), INAPP, querySkus);
+                    Bundle skuDetails = mService.getSkuDetails(BILLING_API_VERSION, mActivityContext.getPackageName(), INAPP, querySkus);
 
                     int response = skuDetails.getInt(RESPONSE_CODE);
 
@@ -157,63 +192,66 @@ public class InAppPurchaseModule extends ReactContextBaseJavaModule {
                         WritableMap details = Arguments.createMap();
 
                         for (String thisResponse : responseList) {
-                            try {
-                                WritableMap map = convertDataToMap(thisResponse);
+                            WritableMap map = convertDataToMap(thisResponse);
 
-                                details.putMap(map.getString(PROP_PRODUCT_ID), map);
-                            } catch (JSONException e) {
-                                promise.reject(e.getMessage());
-
-                                return;
-                            }
+                            details.putMap(map.getString(PROP_PRODUCT_ID), map);
                         }
                     } else {
                         promise.reject(ERROR_PRODUCTS_LOAD_FAILED);
                     }
-                } catch (RemoteException e) {
+                } catch (JSONException|RemoteException e) {
                     promise.reject(e.getMessage());
                 }
             }
-        });
+        }).start();
     }
 
-    @ReactMethod
-    public void purchaseProduct(final String productId, final Promise promise) {
+    private void handlePendingPurchase(final Purchase purchase) {
         try {
-            String purchaseToken = productId + ":" + UUID.randomUUID().toString();
-
-            Bundle buyIntentBundle = mService.getBuyIntent(3, mActivityContext.getPackageName(), productId, INAPP, purchaseToken);
-
-            pendingPurchases.put(purchaseToken, promise);
+            Bundle buyIntentBundle = mService.getBuyIntent(
+                    BILLING_API_VERSION, mActivityContext.getPackageName(),
+                    purchase.getProductId(), INAPP, purchase.getToken());
 
             PendingIntent pendingIntent = buyIntentBundle.getParcelable(BUY_INTENT);
+
+            pendingPurchase = purchase;
 
             ((Activity) mActivityContext).startIntentSenderForResult(pendingIntent.getIntentSender(),
                     REQUEST_CODE_PURCHASE, new Intent(), 0, 0, 0);
         } catch (Exception e) {
-            promise.reject(e.getMessage());
+            purchase.getPromise().reject(e.getMessage());
         }
     }
 
     @ReactMethod
-    public void consumeProduct(final String productId, final Promise promise) {
-    }
+    public void purchaseProduct(final String productId, final Promise promise) {
+        // TODO: Generate a more secure token for verifying purchases
+        String token = UUID.randomUUID().toString();
+        Purchase purchase = new Purchase(productId, token, promise);
 
-    @ReactMethod
-    public void restorePurchases(final Promise promise) {
-    }
-
-    @ReactMethod
-    public void receiptData(final Promise promise) {
+        // Android provides us "onActivityResult" to handle purchase requests
+        // It means that there is no way to detect cancellation and other errors
+        // We can workaround that by handling only one purchase at a time
+        // We'll add puchases to a queue to process them
+        // It looks like  nasty hack, but hey, whatever works
+        if (pendingPurchase != null) {
+            queuedPurchases.add(purchase);
+        } else {
+            handlePendingPurchase(purchase);
+        }
     }
 
     public boolean handleActivityResult(int requestCode, int resultCode, Intent data) {
         if (requestCode == REQUEST_CODE_PURCHASE) {
-            String purchaseData = data.getStringExtra(INAPP_PURCHASE_DATA);
-            String dataSignature = data.getStringExtra(INAPP_DATA_SIGNTAURE);
-
-            if (resultCode == Activity.RESULT_OK) {
-                onPurchaseSuccess(purchaseData);
+            switch (resultCode) {
+                case Activity.RESULT_OK:
+                    onPurchaseSuccess(data.getStringExtra(INAPP_PURCHASE_DATA));
+                    break;
+                case Activity.RESULT_CANCELED:
+                    onPurchaseError(ERROR_PURCHASE_CANCELLED);
+                    break;
+                default:
+                    onPurchaseError(ERROR_PURCHASE_UNKNOWN);
             }
         }
 
@@ -222,6 +260,8 @@ public class InAppPurchaseModule extends ReactContextBaseJavaModule {
 
     public void unBindService() {
         if (mService != null) {
+            // Unbind from the In-app Billing service when we are done
+            // Otherwise, the open service connection could cause the device’s performance to degrade
             mActivityContext.unbindService(mServiceConn);
         }
     }
