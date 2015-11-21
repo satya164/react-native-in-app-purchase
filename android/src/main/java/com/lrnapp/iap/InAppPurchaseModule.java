@@ -52,6 +52,7 @@ public class InAppPurchaseModule extends ReactContextBaseJavaModule {
     private static final String PROP_DEVELOPER_PAYLOAD = "developerPayload";
 
     private static final String ERROR_PRODUCTS_LOAD_FAILED = "Failed to load products";
+    private static final String ERROR_PURCHASE_VERIFICATION_FAILED = "Failed to verify purchase";
     private static final String ERROR_PURCHASE_CANCELLED = "Purchase was cancelled";
     private static final String ERROR_PURCHASE_UNKNOWN = "An error occurred while purchase";
 
@@ -151,8 +152,13 @@ public class InAppPurchaseModule extends ReactContextBaseJavaModule {
     private void onPurchaseSuccess(final String data) {
         if (pendingPurchase != null) {
             try {
-                pendingPurchase.getPromise().resolve(convertDataToMap(data));
-                onPurchaseHandled();
+                WritableMap details = convertDataToMap(data);
+
+                if (pendingPurchase.getToken().equals(details.getString(PROP_PURCHASE_TOKEN))) {
+                    pendingPurchase.getPromise().resolve(details);
+                } else {
+                    onPurchaseError(ERROR_PURCHASE_VERIFICATION_FAILED);
+                }
             } catch (JSONException e) {
                 onPurchaseError(e.getMessage());
             }
