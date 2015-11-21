@@ -6,7 +6,6 @@ import android.content.ComponentName;
 import android.content.Context;
 import android.content.Intent;
 import android.content.ServiceConnection;
-import android.os.AsyncTask;
 import android.os.Bundle;
 import android.os.IBinder;
 import android.os.RemoteException;
@@ -18,6 +17,7 @@ import com.facebook.react.bridge.ReactApplicationContext;
 import com.facebook.react.bridge.ReactContextBaseJavaModule;
 import com.facebook.react.bridge.ReactMethod;
 import com.facebook.react.bridge.ReadableArray;
+import com.facebook.react.bridge.WritableArray;
 import com.facebook.react.bridge.WritableMap;
 
 import org.json.JSONException;
@@ -38,6 +38,10 @@ public class InAppPurchaseModule extends ReactContextBaseJavaModule {
     private static final String DETAILS_LIST = "DETAILS_LIST";
     private static final String BUY_INTENT = "BUY_INTENT";
     private static final String INAPP_PURCHASE_DATA = "INAPP_PURCHASE_DATA";
+    private static final String INAPP_PURCHASE_ITEM_LIST = "INAPP_PURCHASE_ITEM_LIST";
+    private static final String INAPP_PURCHASE_DATA_LIST = "INAPP_PURCHASE_DATA_LIST";
+    private static final String INAPP_DATA_SIGNATURE_LIST = "INAPP_DATA_SIGNATURE_LIST";
+    private static final String INAPP_CONTINUATION_TOKEN = "INAPP_CONTINUATION_TOKEN";
 
     private static final int BILLING_API_VERSION = 3;
     private static final int BILLING_RESPONSE_RESULT_OK = 0;
@@ -210,6 +214,44 @@ public class InAppPurchaseModule extends ReactContextBaseJavaModule {
                 }
             }
         }).start();
+    }
+
+    @ReactMethod
+    public void loadPurchases(final String token, final Promise promise) {
+        try {
+            WritableMap purchases = Arguments.createMap();
+            Bundle ownedItems = mService.getPurchases(BILLING_API_VERSION, mActivityContext.getPackageName(), INAPP, token);
+
+            int response = ownedItems.getInt(RESPONSE_CODE);
+
+            if (response == 0) {
+                purchases.putString(INAPP_CONTINUATION_TOKEN, ownedItems.getString(INAPP_CONTINUATION_TOKEN));
+
+                ArrayList<String> ownedSkus =
+                        ownedItems.getStringArrayList(INAPP_PURCHASE_ITEM_LIST);
+                ArrayList<String> purchaseDataList =
+                        ownedItems.getStringArrayList(INAPP_PURCHASE_DATA_LIST);
+                ArrayList<String> signatureList =
+                        ownedItems.getStringArrayList(INAPP_DATA_SIGNATURE_LIST);
+
+                WritableArray items = Arguments.createArray();
+
+                for (int i = 0, l = purchaseDataList.size(); i < l; ++i) {
+                    WritableMap data = Arguments.createMap();
+
+                    data.putString("data", purchaseDataList.get(i));
+                    data.putString("signature", signatureList.get(i));
+                    data.putString("item", ownedSkus.get(i));
+
+                    items.pushMap(data);
+                }
+
+                purchases.putArray("items", items);
+                promise.resolve(purchases);
+            }
+        } catch (RemoteException e) {
+            promise.reject(e.getMessage());
+        }
     }
 
     private void handlePendingPurchase(final Purchase purchase) {
