@@ -1,5 +1,7 @@
 # `react-native-in-app-utils`
 
+[![Greenkeeper badge](https://badges.greenkeeper.io/satya164/react-native-in-app-purchase.svg)](https://greenkeeper.io/)
+
 A react-native wrapper for handling in-app purchases.
 
 # Notes
